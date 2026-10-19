@@ -1,0 +1,130 @@
+// Supply chain operations dashboard: DAX measures and calculated columns
+// All measures read from one table, SupplyChain, and are stored in a _Measures table.
+
+
+// ---------- Calculated columns (on the SupplyChain table) ----------
+
+// Critical = fewer than 10 units. Reorder = less stock than the usual order size.
+Stock Status =
+SWITCH ( TRUE (),
+    SupplyChain[Stock levels] < 10, "Critical",
+    SupplyChain[Stock levels] < SupplyChain[Order quantities], "Reorder",
+    "OK"
+)
+
+// Sort order for Stock Status (Critical, Reorder, OK).
+// Built from the stock numbers, not from Stock Status, to avoid a circular dependency.
+Stock Sort =
+SWITCH ( TRUE (),
+    SupplyChain[Stock levels] < 10, 1,
+    SupplyChain[Stock levels] < SupplyChain[Order quantities], 2,
+    3
+)
+
+// Groups supplier lead time into three bands
+Lead Time Band =
+SWITCH ( TRUE (),
+    SupplyChain[Supplier Lead Time] <= 10, "1-10 days",
+    SupplyChain[Supplier Lead Time] <= 20, "11-20 days",
+    "21-30 days"
+)
+
+
+// ---------- Sales ----------
+
+Total Revenue = SUM ( SupplyChain[Revenue generated] )
+
+Units Sold = SUM ( SupplyChain[Number of products sold] )
+
+SKU Count = COUNTROWS ( SupplyChain )
+
+
+// ---------- Logistics ----------
+
+// "Costs" is treated as the total logistics cost for each product
+Logistics Cost = SUM ( SupplyChain[Costs] )
+
+Logistics Cost % = DIVIDE ( [Logistics Cost], [Total Revenue] )
+
+Avg Cost per SKU = DIVIDE ( [Logistics Cost], [SKU Count] )
+
+Avg Shipping Time = AVERAGE ( SupplyChain[Shipping times] )
+
+// Shipping costs is a per-unit rate, so it's averaged, never summed
+Avg Shipping Cost = AVERAGE ( SupplyChain[Shipping costs] )
+
+Avg Customer Lead Time = AVERAGE ( SupplyChain[Customer Lead Time] )
+
+
+// ---------- Suppliers and quality ----------
+
+Avg Supplier Lead Time = AVERAGE ( SupplyChain[Supplier Lead Time] )
+
+Avg Mfg Lead Time = AVERAGE ( SupplyChain[Manufacturing lead time] )
+
+Avg Mfg Cost = AVERAGE ( SupplyChain[Manufacturing costs] )
+
+// Defect rates are stored as percentages (e.g. 2.3), so divide by 100 for % format
+Avg Defect Rate = AVERAGE ( SupplyChain[Defect rates] ) / 100
+
+Inspection Fail % =
+DIVIDE ( CALCULATE ( [SKU Count], SupplyChain[Inspection results] = "Fail" ), [SKU Count] )
+
+Inspection Pass % =
+DIVIDE ( CALCULATE ( [SKU Count], SupplyChain[Inspection results] = "Pass" ), [SKU Count] )
+
+Inspection Pending % =
+DIVIDE ( CALCULATE ( [SKU Count], SupplyChain[Inspection results] = "Pending" ), [SKU Count] )
+
+
+// ---------- Inventory ----------
+
+Total Stock = SUM ( SupplyChain[Stock levels] )
+
+Avg Availability = AVERAGE ( SupplyChain[Availability] ) / 100
+
+Critical Stock SKUs = CALCULATE ( [SKU Count], SupplyChain[Stock Status] = "Critical" )
+
+Reorder SKUs = CALCULATE ( [SKU Count], SupplyChain[Stock Status] = "Reorder" )
+
+// Revenue from products that are almost out of stock
+Revenue at Risk = CALCULATE ( [Total Revenue], SupplyChain[Stock Status] = "Critical" )
+
+
+// ---------- Colour rules (used for conditional formatting) ----------
+
+// Red over 45% failed, amber over 25%, otherwise green
+Fail Colour =
+SWITCH ( TRUE (),
+    [Inspection Fail %] > 0.45, "#B23A3A",
+    [Inspection Fail %] > 0.25, "#C98A2B",
+    "#2F7D5B"
+)
+
+// Red over 2.5% defects, amber over 2%, otherwise green
+Defect Colour =
+SWITCH ( TRUE (),
+    [Avg Defect Rate] > 0.025, "#B23A3A",
+    [Avg Defect Rate] > 0.02,  "#C98A2B",
+    "#2F7D5B"
+)
+
+Stock Colour =
+SWITCH ( SELECTEDVALUE ( SupplyChain[Stock Status] ),
+    "Critical", "#B23A3A",
+    "Reorder",  "#C98A2B",
+    "#2F7D5B"
+)
+
+
+// ---------- Text ----------
+
+// One-line summary on the Overview page that updates with the filters
+Headline Insight =
+VAR WorstSupplier =
+    MAXX ( TOPN ( 1, ALLSELECTED ( SupplyChain[Supplier name] ), [Inspection Fail %], DESC ), SupplyChain[Supplier name] )
+VAR WorstFail = MAXX ( ALLSELECTED ( SupplyChain[Supplier name] ), [Inspection Fail %] )
+RETURN
+    "Avg defect rate is " & FORMAT ( [Avg Defect Rate], "0.00%" )
+        & ". " & WorstSupplier & " fails " & FORMAT ( WorstFail, "0%" ) & " of inspections. "
+        & [Critical Stock SKUs] & " products are almost out of stock."
